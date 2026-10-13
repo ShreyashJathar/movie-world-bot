@@ -1,0 +1,76 @@
+from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
+from telegram.constants import ParseMode
+from telegram.ext import ContextTypes
+from database import add_user, get_movie_by_code, record_user_download
+from services.fsub import is_user_subscribed, get_fsub_keyboard, get_fsub_message
+from services.delivery import deliver_movie_file
+from services.ratelimit import (
+    check_daily_limit,
+    get_daily_limit_message,
+    get_daily_limit_keyboard
+)
+from services.premium import get_premium_plans_card
+from handlers.payment import display_storefront
+from config import is_admin, logger
+
+async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /start command and deep links."""
+    if not update.effective_user or not update.effective_message:
+        return
+
+    user = update.effective_user
+    chat = update.effective_chat
+    await add_user(user.id, user.username, user.first_name)
+
+    # Check for deep link arguments (e.g. /start file_code)
+    args = context.args
+    if args and len(args) > 0:
+        param = args[0]
+        share_code = param.replace("file_", "").strip()
+        
+        # Check Force-Subscription
+        subscribed = await is_user_subscribed(context.bot, user.id)
+        if not subscribed:
+            await update.effective_message.reply_text(
+                text=get_fsub_message(),
+                reply_markup=get_fsub_keyboard(callback_data=f"check_fsub:file:{share_code}"),
+                parse_mode=ParseMode.MARKDOWN
+            )
+            return
+
+        # Fetch movie
+        movie = await get_movie_by_code(share_code)
+        if not movie:
+            await update.effective_message.reply_text(
+                text="❌ <b>Link Expired:</b> This movie file could not be found or has been removed.",
+                parse_mode=ParseMode.HTML
+            )
+            return
+
+        # Check 1 Movie Per Day Limit (VIP subscribers bypass)
+        allowed, hours_left, mins_left = await check_daily_limit(user.id, user.username)
+        if not allowed:
+            await update.effective_message.reply_text(
+                text=get_daily_limit_message(hours_left, mins_left),
+                reply_markup=get_daily_limit_keyboard(),
+                parse_mode=ParseMode.HTML
+            )
+            return
+
+        await update.effective_message.reply_text("⏳ <i>Sending your requested movie file...</i>", parse_mode=ParseMode.HTML)
+        success = await deliver_movie_file(context.bot, chat.id, movie)
+        if success:
+            await record_user_download(user.id, movie["id"])
+        return
+
+    # When user sends /start, immediately display the UPI QR code image and exact pricing
+    await display_storefront(update, context)
+
+async def buy_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /buy command to view UPI QR code and pricing."""
+    await display_storefront(update, context)
+
+async def premium_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /plan or /premium command to view VIP pricing and status."""
+    await display_storefront(update, context)
+
