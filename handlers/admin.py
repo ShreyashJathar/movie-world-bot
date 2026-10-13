@@ -23,6 +23,7 @@ from database import (
     get_recent_movie_requests
 )
 from services.metadata import format_file_size
+from services.reminder import notify_requesters_of_new_movie
 
 
 def extract_media_info(message: Message) -> Optional[Tuple[str, str, str, int, Optional[str], Optional[str]]]:
@@ -94,6 +95,9 @@ async def handle_admin_upload(update: Update, context: ContextTypes.DEFAULT_TYPE
         f"💡 <i>Users can also search this movie by typing its title in chat.</i>"
     )
 
+    if is_new:
+        asyncio.create_task(notify_requesters_of_new_movie(context.bot, file_name, share_code))
+
     await message.reply_text(response, parse_mode=ParseMode.HTML)
 
 async def handle_channel_post(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -125,6 +129,7 @@ async def handle_channel_post(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     if is_new:
         logger.info(f"Auto-indexed new channel post '{file_name}' (ID: {movie_id}, Code: {share_code})")
+        asyncio.create_task(notify_requesters_of_new_movie(context.bot, file_name, share_code))
 
 async def admin_help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Show admin panel commands."""

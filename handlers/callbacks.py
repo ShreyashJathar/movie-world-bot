@@ -1,4 +1,5 @@
-from telegram import Update
+from urllib.parse import quote
+from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.constants import ParseMode
 from telegram.ext import ContextTypes
 from database import (
@@ -7,7 +8,10 @@ from database import (
     search_movies,
     get_total_movies,
     get_total_users,
-    record_user_download
+    record_user_download,
+    get_referral_stats,
+    consume_user_bonus_download,
+    get_user_downloads_today
 )
 from services.fsub import is_user_subscribed, get_fsub_keyboard, get_fsub_message
 from services.delivery import deliver_movie_file
@@ -16,6 +20,11 @@ from services.ratelimit import (
     get_daily_limit_message,
     get_daily_limit_keyboard
 )
+from services.shortlink import (
+    create_verification_link,
+    get_verification_message,
+    get_verification_keyboard
+)
 from handlers.search import build_search_keyboard, PER_PAGE
 from handlers.payment import (
     display_storefront,
@@ -23,7 +32,7 @@ from handlers.payment import (
     handle_payment_approval,
     handle_payment_rejection
 )
-from config import is_admin, logger
+from config import is_admin, DAILY_MOVIE_LIMIT, logger
 
 async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Route all inline button clicks."""
@@ -75,6 +84,49 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
     if data in ["buy_premium", "buy"]:
         await query.answer()
         await display_storefront(update, context)
+        return
+
+    # Unlock 24h Pass via Shortlink
+    if data == "get_shortlink_pass":
+        await query.answer()
+        bot_info = await context.bot.get_me()
+        token, short_url = await create_verification_link(bot_info.username, user.id)
+        msg_text = get_verification_message()
+        markup = get_verification_keyboard(short_url)
+        await query.message.reply_text(msg_text, reply_markup=markup, parse_mode=ParseMode.HTML)
+        return
+
+    # Show Personal Referral Link & Stats
+    if data == "show_referral_info":
+        await query.answer()
+        bot_info = await context.bot.get_me()
+        stats = await get_referral_stats(user.id)
+        total_refs = stats["total_referrals"]
+        bonus_passes = stats["bonus_downloads"]
+
+        invite_link = f"https://t.me/{bot_info.username}?start=ref_{user.id}"
+        share_text = quote(f"🎬 Watch & download HD movies for free on Movie World!\nJoin now: {invite_link}")
+        share_url = f"https://t.me/share/url?url={invite_link}&text={share_text}"
+
+        ref_card = (
+            "🎁 <b>Invite Friends & Earn Free Rewards!</b>\n\n"
+            "Share your personal invite link with friends or in movie channels:\n"
+            f"🔗 <b>Your Personal Invite Link:</b>\n"
+            f"<code>{invite_link}</code>\n\n"
+            "💎 <b>Rewards:</b>\n"
+            "• <b>Every 1 Friend:</b> +1 Extra Movie Download Pass today!\n"
+            "• <b>Every 3 Friends:</b> <b>🌟 3 Days Free VIP Membership</b> (Unlimited downloads)!\n\n"
+            "📊 <b>Your Referral Stats:</b>\n"
+            f"• Friends Joined: <b>{total_refs}</b>\n"
+            f"• Extra Download Passes Available: <b>{bonus_passes}</b>\n\n"
+            "👇 <i>Tap below to share directly with your friends:</i>"
+        )
+        markup = InlineKeyboardMarkup([
+            [InlineKeyboardButton("📲 Share with Friends", url=share_url)],
+            [InlineKeyboardButton("💎 View VIP Plans", callback_data="buy_premium")],
+            [InlineKeyboardButton("🔍 Search Movies", callback_data="help_search")]
+        ])
+        await query.message.reply_text(ref_card, reply_markup=markup, parse_mode=ParseMode.HTML)
         return
 
     # Plan Selection: select_plan:<plan_id>
@@ -214,6 +266,9 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         success = await deliver_movie_file(context.bot, update.effective_chat.id, movie)
         if success:
             await record_user_download(user.id, movie_id)
+            count = await get_user_downloads_today(user.id)
+            if count > DAILY_MOVIE_LIMIT:
+                await consume_user_bonus_download(user.id)
         return
 
     # Pagination: sp:<query>:<page>

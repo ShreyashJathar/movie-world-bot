@@ -1,5 +1,6 @@
 import os
 import sys
+import asyncio
 import threading
 from http.server import HTTPServer, BaseHTTPRequestHandler
 
@@ -40,7 +41,7 @@ def run_health_server():
         server.serve_forever()
     except Exception as e:
         logger.warning(f"Could not start health check HTTP server: {e}")
-from handlers.start import start_command, premium_command
+from handlers.start import start_command, premium_command, invite_command
 from handlers.search import handle_search_query
 from handlers.callbacks import handle_callback_query
 from handlers.admin import (
@@ -65,11 +66,27 @@ from handlers.payment import (
     set_admin_group_command,
     handle_chat_member_updated
 )
+from services.reminder import check_and_send_vip_reminders
+
+
+async def vip_expiry_reminder_task(app) -> None:
+    """Periodic background worker to check and send VIP expiry reminders."""
+    # Initial brief delay before starting periodic check
+    await asyncio.sleep(60)
+    while True:
+        try:
+            await check_and_send_vip_reminders(app.bot)
+        except Exception as e:
+            logger.warning(f"Error in VIP expiry reminder loop: {e}")
+        await asyncio.sleep(1800)  # Check every 30 minutes
 
 
 async def on_startup(app) -> None:
-    """Run database migration on bot startup."""
+    """Run database migration and launch background workers on bot startup."""
     await init_db()
+    # Start periodic VIP expiry reminder worker in background
+    asyncio.create_task(vip_expiry_reminder_task(app))
+
     bot_info = await app.bot.get_me()
     logger.info("==========================================")
     logger.info(f"Bot Online: @{bot_info.username} ({bot_info.first_name})")
@@ -103,6 +120,7 @@ def main() -> None:
     # User & General Commands
     app.add_handler(CommandHandler("start", start_command))
     app.add_handler(CommandHandler(["plan", "premium", "buy"], premium_command))
+    app.add_handler(CommandHandler(["invite", "refer"], invite_command))
     
     # Admin Commands
     app.add_handler(CommandHandler("admin", admin_help_command))

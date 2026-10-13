@@ -107,7 +107,50 @@ async def init_db() -> None:
                 user_name TEXT,
                 user_handle TEXT,
                 query TEXT NOT NULL,
+                status TEXT DEFAULT 'PENDING',
+                notified_at TIMESTAMP,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+
+        # Migrations for movie_requests
+        try:
+            await db.execute("ALTER TABLE movie_requests ADD COLUMN status TEXT DEFAULT 'PENDING'")
+        except Exception:
+            pass
+        try:
+            await db.execute("ALTER TABLE movie_requests ADD COLUMN notified_at TIMESTAMP")
+        except Exception:
+            pass
+        await db.execute("UPDATE movie_requests SET status = 'PENDING' WHERE status IS NULL")
+
+        # Migrations for subscriptions (VIP reminders)
+        try:
+            await db.execute("ALTER TABLE subscriptions ADD COLUMN reminded_24h INTEGER DEFAULT 0")
+        except Exception:
+            pass
+        try:
+            await db.execute("ALTER TABLE subscriptions ADD COLUMN expired_notified INTEGER DEFAULT 0")
+        except Exception:
+            pass
+
+        # Table for viral referral tracking
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS referrals (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                referrer_id INTEGER NOT NULL,
+                referred_id INTEGER UNIQUE NOT NULL,
+                rewarded INTEGER DEFAULT 0,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+
+        # Table for bonus download passes earned via referrals
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS user_bonus_downloads (
+                user_id INTEGER PRIMARY KEY,
+                bonus_count INTEGER DEFAULT 0,
+                last_updated TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
 
@@ -119,6 +162,9 @@ async def init_db() -> None:
         await db.execute("CREATE INDEX IF NOT EXISTS idx_payment_requests_user ON payment_requests(user_id)")
         await db.execute("CREATE INDEX IF NOT EXISTS idx_payment_requests_status ON payment_requests(status)")
         await db.execute("CREATE INDEX IF NOT EXISTS idx_payment_requests_utr ON payment_requests(utr_number)")
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_referrals_referrer ON referrals(referrer_id)")
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_referrals_referred ON referrals(referred_id)")
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_movie_requests_status ON movie_requests(status)")
         await db.commit()
     logger.info("Database initialized successfully.")
 
@@ -471,7 +517,9 @@ async def add_user_subscription(user_id: int, days: int) -> str:
             await db.execute(
                 f"""
                 UPDATE subscriptions
-                SET expires_at = datetime(expires_at, '+{days} days')
+                SET expires_at = datetime(expires_at, '+{days} days'),
+                    reminded_24h = 0,
+                    expired_notified = 0
                 WHERE user_id = ?
                 """,
                 (user_id,)
@@ -480,10 +528,12 @@ async def add_user_subscription(user_id: int, days: int) -> str:
             # Start from now
             await db.execute(
                 f"""
-                INSERT INTO subscriptions (user_id, expires_at)
-                VALUES (?, datetime('now', '+{days} days'))
+                INSERT INTO subscriptions (user_id, expires_at, reminded_24h, expired_notified)
+                VALUES (?, datetime('now', '+{days} days'), 0, 0)
                 ON CONFLICT(user_id) DO UPDATE SET
-                    expires_at = datetime('now', '+{days} days')
+                    expires_at = datetime('now', '+{days} days'),
+                    reminded_24h = 0,
+                    expired_notified = 0
                 """,
                 (user_id,)
             )
@@ -663,8 +713,8 @@ async def log_movie_request(user_id: int, user_name: str, user_handle: Optional[
     async with aiosqlite.connect(DATABASE_PATH) as db:
         cur = await db.execute(
             """
-            INSERT INTO movie_requests (user_id, user_name, user_handle, query)
-            VALUES (?, ?, ?, ?)
+            INSERT INTO movie_requests (user_id, user_name, user_handle, query, status)
+            VALUES (?, ?, ?, ?, 'PENDING')
             """,
             (user_id, user_name, user_handle, query)
         )
@@ -686,6 +736,205 @@ async def get_recent_movie_requests(limit: int = 15) -> List[Dict[str, Any]]:
         ) as cur:
             rows = await cur.fetchall()
             return [dict(row) for row in rows]
+
+# ==================== VIRAL REFERRAL SYSTEM ====================
+
+async def add_referral(referrer_id: int, referred_id: int) -> Tuple[bool, str, int]:
+    """
+    Record a successful referral.
+    Returns: (success, reason_or_status, total_referrals)
+    """
+    if referrer_id == referred_id:
+        return False, "self_referral", 0
+
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        # Check if user was already referred
+        async with db.execute("SELECT 1 FROM referrals WHERE referred_id = ?", (referred_id,)) as cur:
+            if await cur.fetchone():
+                return False, "already_referred", 0
+
+        # Record referral
+        await db.execute(
+            "INSERT INTO referrals (referrer_id, referred_id) VALUES (?, ?)",
+            (referrer_id, referred_id)
+        )
+
+        # Award 1 extra bonus movie download pass to referrer
+        await db.execute(
+            """
+            INSERT INTO user_bonus_downloads (user_id, bonus_count)
+            VALUES (?, 1)
+            ON CONFLICT(user_id) DO UPDATE SET
+                bonus_count = bonus_count + 1,
+                last_updated = CURRENT_TIMESTAMP
+            """,
+            (referrer_id,)
+        )
+
+        # Count total referrals for this referrer
+        async with db.execute("SELECT COUNT(*) FROM referrals WHERE referrer_id = ?", (referrer_id,)) as cur:
+            row = await cur.fetchone()
+            total = row[0] if row else 1
+
+        await db.commit()
+
+    # Milestone reward: Every 3 referrals grants 3 Days of Free VIP
+    if total % 3 == 0:
+        try:
+            await add_user_subscription(referrer_id, 3)
+            logger.info(f"Referrer {referrer_id} reached {total} referrals; granted 3 days VIP!")
+        except Exception as e:
+            logger.warning(f"Could not grant milestone VIP to referrer {referrer_id}: {e}")
+
+    return True, "success", total
+
+async def get_referral_stats(user_id: int) -> Dict[str, Any]:
+    """Get total referrals and available bonus downloads for user."""
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        async with db.execute("SELECT COUNT(*) FROM referrals WHERE referrer_id = ?", (user_id,)) as cur:
+            ref_row = await cur.fetchone()
+            total_refs = ref_row[0] if ref_row else 0
+
+        async with db.execute("SELECT bonus_count FROM user_bonus_downloads WHERE user_id = ?", (user_id,)) as cur:
+            b_row = await cur.fetchone()
+            bonus_count = b_row[0] if b_row else 0
+
+    return {
+        "total_referrals": total_refs,
+        "bonus_downloads": max(0, bonus_count)
+    }
+
+async def get_user_bonus_downloads(user_id: int) -> int:
+    """Return available bonus movie downloads for user."""
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        async with db.execute("SELECT bonus_count FROM user_bonus_downloads WHERE user_id = ?", (user_id,)) as cur:
+            row = await cur.fetchone()
+            return max(0, row[0]) if row else 0
+
+async def consume_user_bonus_download(user_id: int) -> bool:
+    """Consume 1 bonus movie download pass if available."""
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        async with db.execute("SELECT bonus_count FROM user_bonus_downloads WHERE user_id = ?", (user_id,)) as cur:
+            row = await cur.fetchone()
+            if not row or row[0] <= 0:
+                return False
+
+        await db.execute(
+            """
+            UPDATE user_bonus_downloads
+            SET bonus_count = MAX(0, bonus_count - 1),
+                last_updated = CURRENT_TIMESTAMP
+            WHERE user_id = ?
+            """,
+            (user_id,)
+        )
+        await db.commit()
+        return True
+
+# ==================== MISSING MOVIE AUTO-NOTIFICATIONS ====================
+
+async def find_pending_movie_requests(movie_name: str) -> List[Dict[str, Any]]:
+    """
+    Find all pending movie requests that match an uploaded movie's title.
+    Matches core title words against the user's query.
+    """
+    clean_upload = "".join(c if c.isalnum() else " " for c in movie_name.lower()).strip()
+    upload_words = [w for w in clean_upload.split() if len(w) >= 3 and not w.isdigit()]
+
+    if not upload_words:
+        return []
+
+    matches = []
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            "SELECT id, user_id, user_name, user_handle, query FROM movie_requests WHERE status = 'PENDING' OR status IS NULL"
+        ) as cur:
+            rows = await cur.fetchall()
+
+        for row in rows:
+            req_query = row["query"]
+            clean_req = "".join(c if c.isalnum() else " " for c in req_query.lower()).strip()
+            req_words = [w for w in clean_req.split() if len(w) >= 3 and not w.isdigit()]
+            if not req_words:
+                continue
+
+            # Check if all significant words of user request appear in uploaded movie name
+            if all(rw in clean_upload for rw in req_words) or any(rw in upload_words for rw in req_words[:2]):
+                matches.append(dict(row))
+
+    return matches
+
+async def mark_movie_request_fulfilled(request_id: int) -> None:
+    """Mark a movie request as fulfilled after notifying the user."""
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        await db.execute(
+            """
+            UPDATE movie_requests
+            SET status = 'FULFILLED',
+                notified_at = CURRENT_TIMESTAMP
+            WHERE id = ?
+            """,
+            (request_id,)
+        )
+        await db.commit()
+
+# ==================== VIP SUBSCRIPTION EXPIRY REMINDERS ====================
+
+async def get_expiring_vip_subscriptions(hours_ahead: int = 24) -> List[Dict[str, Any]]:
+    """
+    Find VIP subscriptions expiring within the next N hours that haven't received a 24h reminder.
+    """
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            f"""
+            SELECT s.user_id, s.expires_at, u.first_name, u.username
+            FROM subscriptions s
+            LEFT JOIN users u ON s.user_id = u.user_id
+            WHERE datetime(s.expires_at) > datetime('now')
+              AND datetime(s.expires_at) <= datetime('now', '+{hours_ahead} hours')
+              AND (s.reminded_24h IS NULL OR s.reminded_24h = 0)
+            """
+        ) as cur:
+            rows = await cur.fetchall()
+            return [dict(row) for row in rows]
+
+async def mark_vip_reminded(user_id: int) -> None:
+    """Mark that 24h expiry reminder was sent to user."""
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        await db.execute(
+            "UPDATE subscriptions SET reminded_24h = 1 WHERE user_id = ?",
+            (user_id,)
+        )
+        await db.commit()
+
+async def get_expired_vip_subscriptions() -> List[Dict[str, Any]]:
+    """
+    Find VIP subscriptions that expired recently and haven't received an expired notice.
+    """
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            """
+            SELECT s.user_id, s.expires_at, u.first_name, u.username
+            FROM subscriptions s
+            LEFT JOIN users u ON s.user_id = u.user_id
+            WHERE datetime(s.expires_at) <= datetime('now')
+              AND (s.expired_notified IS NULL OR s.expired_notified = 0)
+            """
+        ) as cur:
+            rows = await cur.fetchall()
+            return [dict(row) for row in rows]
+
+async def mark_vip_expired_notified(user_id: int) -> None:
+    """Mark that expiration notice was sent to user."""
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        await db.execute(
+            "UPDATE subscriptions SET expired_notified = 1 WHERE user_id = ?",
+            (user_id,)
+        )
+        await db.commit()
 
 
 
