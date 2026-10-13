@@ -1,7 +1,7 @@
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from typing import Optional, Tuple
 from telegram import InlineKeyboardMarkup, InlineKeyboardButton
-from config import DAILY_MOVIE_LIMIT, ADMIN_EXEMPT_FROM_LIMIT, is_admin, logger
+from config import DAILY_MOVIE_LIMIT, ADMIN_EXEMPT_FROM_LIMIT, is_admin
 from database import get_user_downloads_today, is_user_premium
 
 async def check_daily_limit(user_id: int, username: Optional[str] = None) -> Tuple[bool, int, int]:

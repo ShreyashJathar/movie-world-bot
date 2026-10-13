@@ -16,7 +16,6 @@ from services.ratelimit import (
     get_daily_limit_message,
     get_daily_limit_keyboard
 )
-from services.premium import get_premium_plans_card
 from handlers.search import build_search_keyboard, PER_PAGE
 from handlers.payment import (
     display_storefront,
@@ -83,9 +82,9 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         await handle_plan_selection(update, context)
         return
 
-    # Plan Confirmation after photo upload: confirm_plan:<plan_id>
+    # Plan Confirmation fallback: confirm_plan:<plan_id>
     if data.startswith("confirm_plan:"):
-        await handle_plan_confirmation(update, context)
+        await query.answer("Please send your 12-digit UTR or payment screenshot directly in chat.", show_alert=True)
         return
 
     # Admin Payment Approval: pay_appr:<req_id>

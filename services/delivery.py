@@ -1,5 +1,5 @@
-from typing import Optional, Dict, Any
-from telegram import Update, Bot
+from typing import Dict, Any
+from telegram import Bot
 from telegram.constants import ParseMode
 from telegram.error import TelegramError
 from config import AUTO_DELETE_SECONDS, logger

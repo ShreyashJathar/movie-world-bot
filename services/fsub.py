@@ -1,4 +1,3 @@
-from typing import Optional, Tuple
 from telegram import Bot, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.constants import ChatMemberStatus
 from telegram.error import TelegramError

@@ -4,7 +4,6 @@ from datetime import datetime
 from typing import Optional
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.constants import ParseMode
-from telegram.error import TelegramError
 from telegram.ext import ContextTypes
 from config import (
     SUBSCRIPTION_PLANS,
@@ -25,7 +24,6 @@ from database import (
 )
 from services.premium import (
     get_plan_checkout_card,
-    get_premium_plans_card,
     get_storefront_payment_card
 )
 

@@ -5,12 +5,10 @@ from telegram import InlineKeyboardMarkup, InlineKeyboardButton
 from database import get_user_subscription
 from config import (
     SUBSCRIPTION_PLANS,
-    get_plan_by_id,
     UPI_ID,
     UPI_NAME,
     ADMIN_CONTACT_USERNAME,
-    PAYMENT_QR_IMAGE,
-    logger
+    PAYMENT_QR_IMAGE
 )
 
 async def get_premium_plans_card(user_id: int) -> Tuple[str, InlineKeyboardMarkup]:
@@ -100,7 +98,7 @@ def get_plan_checkout_card(plan: Dict[str, Any], user_id: int) -> Tuple[str, Inl
 
     buttons = [
         [
-            InlineKeyboardButton(f"💬 Contact Support", url=f"https://t.me/{ADMIN_CONTACT_USERNAME}"),
+            InlineKeyboardButton("💬 Contact Support", url=f"https://t.me/{ADMIN_CONTACT_USERNAME}"),
             InlineKeyboardButton("🔙 Back to Plans", callback_data="buy_premium")
         ]
     ]
@@ -138,7 +136,7 @@ def get_storefront_payment_card(user_id: int) -> Tuple[str, InlineKeyboardMarkup
             InlineKeyboardButton("⚡ One Year (₹649)", callback_data="select_plan:plan_1year")
         ],
         [
-            InlineKeyboardButton(f"💬 Contact Support", url=f"https://t.me/{ADMIN_CONTACT_USERNAME}"),
+            InlineKeyboardButton("💬 Contact Support", url=f"https://t.me/{ADMIN_CONTACT_USERNAME}"),
             InlineKeyboardButton("🔍 Search Movies", callback_data="help_search")
         ]
     ]

@@ -9,9 +9,8 @@ from services.ratelimit import (
     get_daily_limit_message,
     get_daily_limit_keyboard
 )
-from services.premium import get_premium_plans_card
 from handlers.payment import display_storefront
-from config import is_admin, ADMIN_CONTACT_USERNAME, logger
+from config import ADMIN_CONTACT_USERNAME
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle /start command and deep links."""
@@ -83,7 +82,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     welcome_keyboard = [
         [
             InlineKeyboardButton("💎 VIP Subscription / Plans", callback_data="buy_premium"),
-            InlineKeyboardButton(f"💬 Contact Support", url=f"https://t.me/{ADMIN_CONTACT_USERNAME}")
+            InlineKeyboardButton("💬 Contact Support", url=f"https://t.me/{ADMIN_CONTACT_USERNAME}")
         ]
     ]
 

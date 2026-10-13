@@ -1,5 +1,4 @@
 import math
-import re
 from datetime import datetime
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.constants import ParseMode, ChatType
@@ -15,8 +14,6 @@ from services.fsub import is_user_subscribed, get_fsub_keyboard, get_fsub_messag
 from services.metadata import (
     fetch_movie_metadata,
     format_file_size,
-    clean_movie_title,
-    extract_year,
     parse_search_query
 )
 from handlers.payment import handle_user_payment_text, display_storefront

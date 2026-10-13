@@ -1,10 +1,10 @@
 import asyncio
 from typing import Optional, Tuple
 from telegram import Update, Message
-from telegram.constants import ParseMode, ChatType
+from telegram.constants import ParseMode
 from telegram.error import TelegramError
 from telegram.ext import ContextTypes
-from config import is_admin, STORAGE_CHANNEL_ID, SUBSCRIPTION_PLANS, ADMIN_CONTACT_USERNAME, logger
+from config import is_admin, STORAGE_CHANNEL_ID, SUBSCRIPTION_PLANS, logger
 from database import (
     save_movie,
     get_movie_by_id,
@@ -350,7 +350,7 @@ async def plans_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             f"   💰 Price: <b>{p['currency']}{p['price']}</b>\n"
             f"   📝 Info: {p['description']}\n\n"
         )
-    text += f"💡 <i>Users can view and purchase these via /plan or VIP Plans button.</i>"
+    text += "💡 <i>Users can view and purchase these via /plan or VIP Plans button.</i>"
     await update.effective_message.reply_text(text, parse_mode=ParseMode.HTML)
 
 async def pending_payments_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
