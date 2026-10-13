@@ -66,21 +66,23 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     # Regular /start: Do NOT send payment plans or QR code automatically
     context.user_data["awaiting_payment_proof"] = False
 
+    name = user.first_name or "there"
     welcome_text = (
-        f"👋 <b>Hello {user.first_name}! Welcome to Movie World 🌎</b>\n\n"
-        "Your fast and direct portal for downloading movies and series in high quality!\n\n"
-        "🔍 <b>How to Find Movies:</b>\n"
-        "Simply type the name of any movie in this chat (e.g. <code>Interstellar</code> or <code>Avatar 1080p</code>) to get instant direct download files.\n\n"
-        "💎 <b>VIP Membership:</b>\n"
-        "Want unlimited movie downloads with zero daily restrictions? Tap <b>💎 View VIP Plans</b> below."
+        f"👋 <b>Hello {name}!</b>\n\n"
+        "🎬 <b>Welcome to Movie World Bot</b>\n"
+        "     <b>BY SHREYASH JATHAR 96</b>\n\n"
+        "🔍 <b>How to find movies:</b>\n"
+        "Just type and send the movie name right here in this chat.\n\n"
+        "💡 <b>Examples:</b>\n"
+        "• Interstellar\n"
+        "• Avengers Endgame 1080p\n"
+        "• Dark Knight\n\n"
+        "Enjoy your streaming! 🍿"
     )
 
     welcome_keyboard = [
         [
-            InlineKeyboardButton("💎 View VIP Plans / Buy", callback_data="buy_premium"),
-            InlineKeyboardButton("🔍 How to Search", callback_data="help_search")
-        ],
-        [
+            InlineKeyboardButton("💎 VIP Subscription / Plans", callback_data="buy_premium"),
             InlineKeyboardButton(f"💬 Contact Support", url=f"https://t.me/{ADMIN_CONTACT_USERNAME}")
         ]
     ]
