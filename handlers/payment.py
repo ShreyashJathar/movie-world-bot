@@ -213,6 +213,16 @@ async def handle_user_payment_text(update: Update, context: ContextTypes.DEFAULT
 
     # If user is in payment mode:
     if is_awaiting:
+        lower = text.lower().strip()
+        if lower in ["cancel", "exit", "back"]:
+            context.user_data["awaiting_payment_proof"] = False
+            await message.reply_text("✅ Payment mode closed. You can now search for movies directly!")
+            return True
+
+        if lower in ["plan", "plans", "buy", "price", "prices", "pricing", "subscription", "vip", "qr", "qr code", "payment"]:
+            await display_storefront(update, context)
+            return True
+
         # User MUST send either 12-digit UTR or screenshot
         if not utr_match:
             await message.reply_text(

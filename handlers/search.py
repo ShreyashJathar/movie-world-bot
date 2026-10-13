@@ -12,7 +12,7 @@ from services.metadata import (
     extract_year,
     parse_search_query
 )
-from handlers.payment import handle_user_payment_text
+from handlers.payment import handle_user_payment_text, display_storefront
 from config import logger
 
 PER_PAGE = 6
@@ -63,6 +63,13 @@ async def handle_search_query(update: Update, context: ContextTypes.DEFAULT_TYPE
 
     # Intercept payment proof (12-digit UTR or messages while awaiting payment proof)
     if await handle_user_payment_text(update, context):
+        return
+
+    # If user asks for plans or pricing in chat, display all plans with QR code
+    lower_text = text.lower().strip()
+    plan_keywords = {"plan", "plans", "buy", "price", "prices", "pricing", "subscription", "vip", "qr", "qr code", "payment"}
+    if lower_text in plan_keywords:
+        await display_storefront(update, context)
         return
 
     user = update.effective_user

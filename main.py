@@ -1,4 +1,5 @@
 import sys
+import time
 import asyncio
 
 if hasattr(sys.stdout, 'reconfigure'):
@@ -13,6 +14,7 @@ from telegram.ext import (
     ChatMemberHandler,
     filters
 )
+from telegram.request import HTTPXRequest
 from config import BOT_TOKEN, logger
 from database import init_db
 from handlers.start import start_command, premium_command
@@ -60,8 +62,16 @@ def main() -> None:
         )
         sys.exit(1)
 
+    # Robust HTTP connection request with higher timeouts
+    request = HTTPXRequest(
+        connection_pool_size=16,
+        connect_timeout=30.0,
+        read_timeout=30.0,
+        write_timeout=30.0
+    )
+
     # Initialize application
-    app = ApplicationBuilder().token(BOT_TOKEN).post_init(on_startup).build()
+    app = ApplicationBuilder().token(BOT_TOKEN).request(request).post_init(on_startup).build()
 
     # User & General Commands
     app.add_handler(CommandHandler("start", start_command))
@@ -116,7 +126,10 @@ def main() -> None:
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_search_query))
 
     logger.info("Starting bot polling...")
-    app.run_polling(drop_pending_updates=True)
+    try:
+        app.run_polling(drop_pending_updates=True, bootstrap_retries=10)
+    except Exception as e:
+        logger.error(f"Fatal polling exception: {e}")
 
 if __name__ == "__main__":
     main()

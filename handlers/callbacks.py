@@ -42,6 +42,7 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
 
     # Help search button
     if data == "help_search":
+        context.user_data["awaiting_payment_proof"] = False
         help_text = (
             "💡 <b>Search Tips & Tricks:</b>\n\n"
             "1. <b>Simple is better:</b> Just type the movie name (e.g. <code>Interstellar</code>).\n"

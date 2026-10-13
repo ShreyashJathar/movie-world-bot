@@ -11,7 +11,7 @@ from services.ratelimit import (
 )
 from services.premium import get_premium_plans_card
 from handlers.payment import display_storefront
-from config import is_admin, logger
+from config import is_admin, ADMIN_CONTACT_USERNAME, logger
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle /start command and deep links."""
@@ -63,8 +63,33 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             await record_user_download(user.id, movie["id"])
         return
 
-    # When user sends /start, immediately display the UPI QR code image and exact pricing
-    await display_storefront(update, context)
+    # Regular /start: Do NOT send payment plans or QR code automatically
+    context.user_data["awaiting_payment_proof"] = False
+
+    welcome_text = (
+        f"👋 <b>Hello {user.first_name}! Welcome to Movie World 🌎</b>\n\n"
+        "Your fast and direct portal for downloading movies and series in high quality!\n\n"
+        "🔍 <b>How to Find Movies:</b>\n"
+        "Simply type the name of any movie in this chat (e.g. <code>Interstellar</code> or <code>Avatar 1080p</code>) to get instant direct download files.\n\n"
+        "💎 <b>VIP Membership:</b>\n"
+        "Want unlimited movie downloads with zero daily restrictions? Tap <b>💎 View VIP Plans</b> below."
+    )
+
+    welcome_keyboard = [
+        [
+            InlineKeyboardButton("💎 View VIP Plans / Buy", callback_data="buy_premium"),
+            InlineKeyboardButton("🔍 How to Search", callback_data="help_search")
+        ],
+        [
+            InlineKeyboardButton(f"💬 Contact Support", url=f"https://t.me/{ADMIN_CONTACT_USERNAME}")
+        ]
+    ]
+
+    await update.effective_message.reply_text(
+        text=welcome_text,
+        reply_markup=InlineKeyboardMarkup(welcome_keyboard),
+        parse_mode=ParseMode.HTML
+    )
 
 async def buy_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle /buy command to view UPI QR code and pricing."""
