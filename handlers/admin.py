@@ -19,7 +19,8 @@ from database import (
     get_total_premium_users,
     get_pending_payment_requests,
     get_payment_request,
-    update_payment_request_status
+    update_payment_request_status,
+    get_recent_movie_requests
 )
 from services.metadata import format_file_size
 
@@ -144,6 +145,7 @@ async def admin_help_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
         "• <code>/resetlimit [user_id]</code> - Reset daily limit for user or self\n"
         "• <code>/delete &lt;id&gt;</code> - Delete a movie from the database\n"
         "• <code>/link &lt;id&gt;</code> - Generate share link for a movie ID\n"
+        "• <code>/requests</code> - View recent missing movie requests from users\n"
         "• <code>/setadmingroup</code> - Link private group (https://t.me/+lgLJDd4mfZw5M2U1) for payment approvals\n"
         "• <code>/broadcast &lt;message&gt;</code> - Broadcast text to all users\n\n"
         "<b>How to add movies:</b>\n"
@@ -464,4 +466,30 @@ async def reject_payment_command(update: Update, context: ContextTypes.DEFAULT_T
         await context.bot.send_message(chat_id=req["user_id"], text=user_notify_text)
     except Exception as e:
         logger.warning(f"Could not notify user {req['user_id']}: {e}")
+
+async def requests_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Show recent requested movies not in database: /requests"""
+    user = update.effective_user
+    if not user or not is_admin(user.id, user.username):
+        return
+
+    requests = await get_recent_movie_requests(limit=15)
+    if not requests:
+        await update.effective_message.reply_text(
+            "✅ <b>No pending movie requests!</b>\nAll user searches matched existing movies in the library.",
+            parse_mode=ParseMode.HTML
+        )
+        return
+
+    text = f"📋 <b>Recent Missing Movie Requests ({len(requests)}):</b>\n\n"
+    for req in requests:
+        user_mention = f"@{req['user_handle']}" if req['user_handle'] else f"ID: <code>{req['user_id']}</code>"
+        text += (
+            f"🎬 <b>{req['query']}</b>\n"
+            f"👤 By: {req['user_name']} ({user_mention})\n"
+            f"⏰ Time: <code>{req['created_at']}</code>\n\n"
+        )
+    text += "💡 <i>Upload these movies to your storage channel to satisfy user requests!</i>"
+    await update.effective_message.reply_text(text, parse_mode=ParseMode.HTML)
+
 

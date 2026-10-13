@@ -100,6 +100,17 @@ async def init_db() -> None:
             )
         """)
 
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS movie_requests (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                user_name TEXT,
+                user_handle TEXT,
+                query TEXT NOT NULL,
+                created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+
         await db.execute("CREATE INDEX IF NOT EXISTS idx_file_name ON movies(file_name)")
         await db.execute("CREATE INDEX IF NOT EXISTS idx_share_code ON movies(share_code)")
         await db.execute("CREATE INDEX IF NOT EXISTS idx_pending_token ON pending_verifications(token)")
@@ -646,5 +657,35 @@ async def get_effective_admin_group_id() -> Optional[int]:
         except ValueError:
             return None
     return None
+
+async def log_movie_request(user_id: int, user_name: str, user_handle: Optional[str], query: str) -> int:
+    """Log a user's requested movie that was not in database."""
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        cur = await db.execute(
+            """
+            INSERT INTO movie_requests (user_id, user_name, user_handle, query)
+            VALUES (?, ?, ?, ?)
+            """,
+            (user_id, user_name, user_handle, query)
+        )
+        await db.commit()
+        return cur.lastrowid
+
+async def get_recent_movie_requests(limit: int = 15) -> List[Dict[str, Any]]:
+    """Retrieve recent missing movie requests."""
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            """
+            SELECT id, user_id, user_name, user_handle, query, created_at
+            FROM movie_requests
+            ORDER BY id DESC
+            LIMIT ?
+            """,
+            (limit,)
+        ) as cur:
+            rows = await cur.fetchall()
+            return [dict(row) for row in rows]
+
 
 

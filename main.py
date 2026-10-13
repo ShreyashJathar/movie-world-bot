@@ -59,7 +59,8 @@ from handlers.admin import (
     plans_command,
     pending_payments_command,
     approve_payment_command,
-    reject_payment_command
+    reject_payment_command,
+    requests_command
 )
 from handlers.payment import (
     handle_user_payment_photo,
@@ -118,6 +119,7 @@ def main() -> None:
     app.add_handler(CommandHandler("delete", delete_movie_command))
     app.add_handler(CommandHandler("link", get_link_command))
     app.add_handler(CommandHandler("broadcast", broadcast_command))
+    app.add_handler(CommandHandler(["requests", "movierequests"], requests_command))
     app.add_handler(CommandHandler(["setadmingroup", "linkgroup", "id"], set_admin_group_command))
 
     # Auto-link Private Admin Group when bot is added to group
