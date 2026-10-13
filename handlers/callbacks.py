@@ -24,7 +24,7 @@ from handlers.payment import (
     handle_payment_approval,
     handle_payment_rejection
 )
-from config import is_admin, logger, UPI_ID
+from config import is_admin, logger
 
 async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Route all inline button clicks."""
@@ -76,11 +76,6 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
     if data in ["buy_premium", "buy"]:
         await query.answer()
         await display_storefront(update, context)
-        return
-
-    # Copy UPI callback alert
-    if data.startswith("copy_upi:"):
-        await query.answer(f"UPI ID: {UPI_ID}\n(Tap UPI ID in message to copy)", show_alert=True)
         return
 
     # Plan Selection: select_plan:<plan_id>

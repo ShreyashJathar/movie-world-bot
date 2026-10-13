@@ -86,25 +86,21 @@ def get_plan_checkout_card(plan: Dict[str, Any], user_id: int) -> Tuple[str, Inl
 
     text = (
         f"💎 <b>Storefront VIP Checkout — {badge} {name}</b>\n\n"
-        f"💰 <b>Exact Price:</b> <code>₹{price}</code>\n"
+        f"💰 <b>Exact Amount:</b> <code>₹{price}</code>\n"
         f"⏳ <b>Duration:</b> <b>{days} Days</b>\n"
         f"⚡ <b>Perks:</b> Unlimited Movie Downloads with zero daily limits\n\n"
         f"━━━━━━━━━━━━━━━━━━\n"
-        f"💳 <b>UPI Payment Details:</b>\n"
-        f"• <b>UPI ID:</b> <code>{UPI_ID}</code> <i>(Tap to Copy)</i>\n"
-        f"• <b>Payee Name:</b> <b>{UPI_NAME}</b>\n"
-        f"• <b>Amount:</b> <code>₹{price}</code>\n\n"
-        f"📌 <b>Clear Instructions:</b>\n"
-        f"1. Pay <b>₹{price}</b> via UPI using any UPI app (GPay / PhonePe / Paytm).\n"
-        f"2. Then reply directly to this bot with either:\n"
+        f"📸 <b>How to Pay via QR Code:</b>\n"
+        f"1. Scan the QR code image above using any UPI App (Google Pay, PhonePe, Paytm, BHIM).\n"
+        f"2. Complete the payment of <b>₹{price}</b>.\n"
+        f"3. After payment, reply directly to this bot with either:\n"
         f"   • Your <b>12-digit UTR/Reference number</b>, or\n"
         f"   • A clear <b>screenshot of the payment confirmation page</b>."
     )
 
     buttons = [
-        [InlineKeyboardButton(f"📋 Copy UPI ID: {UPI_ID}", callback_data=f"copy_upi:{price}")],
         [
-            InlineKeyboardButton(f"💬 Message Support", url=f"https://t.me/{ADMIN_CONTACT_USERNAME}"),
+            InlineKeyboardButton(f"💬 Contact Support", url=f"https://t.me/{ADMIN_CONTACT_USERNAME}"),
             InlineKeyboardButton("🔙 Back to Plans", callback_data="buy_premium")
         ]
     ]
@@ -137,12 +133,11 @@ def get_storefront_payment_card(user_id: int, plan: Optional[Dict[str, Any]] = N
         "• 👑 <b>6 Months:</b> 180 Days — <b>₹349</b>\n"
         "• ⚡ <b>One Year:</b> 365 Days — <b>₹649</b>\n\n"
         "━━━━━━━━━━━━━━━━━━\n"
-        f"💳 <b>UPI ID:</b> <code>{UPI_ID}</code> <i>(Tap to Copy)</i>\n"
-        f"👤 <b>Payee Name:</b> <b>{UPI_NAME}</b>\n"
-        f"📦 <b>Default Plan:</b> {chosen_plan['badge']} {plan_name} (₹{amount})\n\n"
-        "📌 <b>Clear Instructions:</b>\n"
-        "1. Scan the QR code above or pay via UPI using any UPI app (GPay / PhonePe / Paytm).\n"
-        "2. Then reply directly to this bot with either:\n"
+        f"📦 <b>Selected Plan:</b> {chosen_plan['badge']} {plan_name} (₹{amount})\n\n"
+        "📸 <b>How to Pay via QR Code:</b>\n"
+        "1. Tap any plan button below to view its specific QR code.\n"
+        "2. Scan the QR code image using any UPI app (GPay, PhonePe, Paytm, BHIM).\n"
+        "3. After payment, reply directly to this bot with either:\n"
         "   • Your <b>12-digit UTR/Reference number</b>, or\n"
         "   • A clear <b>screenshot of the payment confirmation page</b>."
     )
@@ -160,10 +155,7 @@ def get_storefront_payment_card(user_id: int, plan: Optional[Dict[str, Any]] = N
             InlineKeyboardButton("⚡ One Year (₹649)", callback_data="select_plan:plan_1year")
         ],
         [
-            InlineKeyboardButton(f"📋 Copy UPI ID: {UPI_ID}", callback_data=f"copy_upi:{amount}"),
-            InlineKeyboardButton(f"💬 Support", url=f"https://t.me/{ADMIN_CONTACT_USERNAME}")
-        ],
-        [
+            InlineKeyboardButton(f"💬 Contact Support", url=f"https://t.me/{ADMIN_CONTACT_USERNAME}"),
             InlineKeyboardButton("🔍 Search Movies", callback_data="help_search")
         ]
     ]
