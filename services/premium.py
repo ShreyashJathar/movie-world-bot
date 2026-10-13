@@ -107,24 +107,13 @@ def get_plan_checkout_card(plan: Dict[str, Any], user_id: int) -> Tuple[str, Inl
 
     return text, InlineKeyboardMarkup(buttons), qr_url
 
-def get_storefront_payment_card(user_id: int, plan: Optional[Dict[str, Any]] = None) -> Tuple[str, InlineKeyboardMarkup, str]:
+def get_storefront_payment_card(user_id: int) -> Tuple[str, InlineKeyboardMarkup]:
     """
-    Generate payment storefront card displaying exact pricing, QR code, and strict instructions.
+    Generate payment storefront card displaying exact pricing and plan selection buttons.
+    (No QR code is sent with this message; QR code is sent once user selects a plan).
     """
-    chosen_plan = plan or get_plan_by_id("plan_1month")
-    amount = chosen_plan["price"]
-    plan_name = chosen_plan["name"]
-
-    encoded_name = quote(UPI_NAME)
-    encoded_note = quote(f"{chosen_plan['name']} VIP User {user_id}")
-    upi_uri = f"upi://pay?pa={UPI_ID}&pn={encoded_name}&am={amount}&cu=INR&tn={encoded_note}"
-    if chosen_plan.get("qr_image") and os.path.exists(chosen_plan["qr_image"]):
-        qr_url = chosen_plan["qr_image"]
-    else:
-        qr_url = PAYMENT_QR_IMAGE or f"https://api.qrserver.com/v1/create-qr-code/?size=350x350&data={quote(upi_uri)}"
-
     text = (
-        "💎 <b>Movie World Storefront — VIP Subscription</b>\n\n"
+        "💎 <b>Movie World — VIP Subscription</b>\n\n"
         "Unlock <b>UNLIMITED MOVIE DOWNLOADS</b> with zero daily limits!\n\n"
         "<b>Exact Pricing:</b>\n"
         "• 🌟 <b>Weekly:</b> 7 Days — <b>₹39</b>\n"
@@ -133,13 +122,7 @@ def get_storefront_payment_card(user_id: int, plan: Optional[Dict[str, Any]] = N
         "• 👑 <b>6 Months:</b> 180 Days — <b>₹349</b>\n"
         "• ⚡ <b>One Year:</b> 365 Days — <b>₹649</b>\n\n"
         "━━━━━━━━━━━━━━━━━━\n"
-        f"📦 <b>Selected Plan:</b> {chosen_plan['badge']} {plan_name} (₹{amount})\n\n"
-        "📸 <b>How to Pay via QR Code:</b>\n"
-        "1. Tap any plan button below to view its specific QR code.\n"
-        "2. Scan the QR code image using any UPI app (GPay, PhonePe, Paytm, BHIM).\n"
-        "3. After payment, reply directly to this bot with either:\n"
-        "   • Your <b>12-digit UTR/Reference number</b>, or\n"
-        "   • A clear <b>screenshot of the payment confirmation page</b>."
+        "👇 <b>Select a plan below to view its QR code & payment instructions:</b>"
     )
 
     keyboard = [
@@ -160,6 +143,6 @@ def get_storefront_payment_card(user_id: int, plan: Optional[Dict[str, Any]] = N
         ]
     ]
 
-    return text, InlineKeyboardMarkup(keyboard), qr_url
+    return text, InlineKeyboardMarkup(keyboard)
 
 

@@ -31,40 +31,14 @@ from services.premium import (
 
 async def display_storefront(update: Update, context: ContextTypes.DEFAULT_TYPE, plan_id: Optional[str] = None) -> None:
     """
-    Display UPI QR code image and exact pricing with clear instructions:
-    Must pay via UPI and reply with either 12-digit UTR/Reference number or payment screenshot.
+    Display plans overview text with plan selection buttons (No QR code sent here).
+    QR code is sent after the user taps/selects a specific plan.
     """
     user = update.effective_user
     if not user:
         return
 
-    context.user_data["awaiting_payment_proof"] = True
-    plan = get_plan_by_id(plan_id) if plan_id else get_plan_by_id("plan_1month")
-    if plan:
-        context.user_data["selected_plan_id"] = plan["id"]
-
-    text, markup, qr_url = get_storefront_payment_card(user.id, plan)
-
-    try:
-        if update.effective_message:
-            if qr_url and os.path.exists(qr_url):
-                with open(qr_url, "rb") as f:
-                    await update.effective_message.reply_photo(
-                        photo=f,
-                        caption=text,
-                        reply_markup=markup,
-                        parse_mode=ParseMode.HTML
-                    )
-            else:
-                await update.effective_message.reply_photo(
-                    photo=qr_url,
-                    caption=text,
-                    reply_markup=markup,
-                    parse_mode=ParseMode.HTML
-                )
-            return
-    except Exception as e:
-        logger.warning(f"Could not send storefront QR photo: {e}. Falling back to text message.")
+    text, markup = get_storefront_payment_card(user.id)
 
     if update.effective_message:
         await update.effective_message.reply_text(
