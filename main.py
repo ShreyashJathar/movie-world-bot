@@ -1,6 +1,9 @@
+import os
 import sys
 import time
 import asyncio
+import threading
+from http.server import HTTPServer, BaseHTTPRequestHandler
 
 if hasattr(sys.stdout, 'reconfigure'):
     sys.stdout.reconfigure(encoding='utf-8', errors='replace')
@@ -17,6 +20,28 @@ from telegram.ext import (
 from telegram.request import HTTPXRequest
 from config import BOT_TOKEN, logger
 from database import init_db
+
+class HealthHandler(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header("Content-type", "text/plain")
+        self.end_headers()
+        self.wfile.write(b"OK - Movie World Bot is running!")
+
+    def log_message(self, format, *args):
+        pass  # Suppress HTTP access noise in logs
+
+def run_health_server():
+    port_str = os.getenv("PORT")
+    if not port_str:
+        return
+    try:
+        port = int(port_str)
+        server = HTTPServer(("0.0.0.0", port), HealthHandler)
+        logger.info(f"Health check HTTP server listening on port {port} for Render/Cloud")
+        server.serve_forever()
+    except Exception as e:
+        logger.warning(f"Could not start health check HTTP server: {e}")
 from handlers.start import start_command, premium_command
 from handlers.search import handle_search_query
 from handlers.callbacks import handle_callback_query
@@ -61,6 +86,9 @@ def main() -> None:
             "    Example: BOT_TOKEN=123456789:ABCdefGhIJKlmNoPQRsTUVwxyZ\n"
         )
         sys.exit(1)
+
+    # Start background health server if PORT is set (Render/Cloud deployment)
+    threading.Thread(target=run_health_server, daemon=True).start()
 
     # Robust HTTP connection request with higher timeouts
     request = HTTPXRequest(
