@@ -63,27 +63,20 @@ try:
 except ValueError:
     AUTO_DELETE_SECONDS = 600
 
-# Daily Download Limit per user (default: 1 movie per day, 0 to disable)
+# Free Lifetime Movie Limit per user (new users get 2 free movies total, then must take VIP or invite friends)
 try:
-    DAILY_MOVIE_LIMIT = int(os.getenv("DAILY_MOVIE_LIMIT", "1").strip())
+    FREE_MOVIE_LIMIT = int(os.getenv("FREE_MOVIE_LIMIT", os.getenv("DAILY_MOVIE_LIMIT", "2")).strip())
 except ValueError:
-    DAILY_MOVIE_LIMIT = 1
+    FREE_MOVIE_LIMIT = 2
 
-# Whether admins bypass the daily limit (default: False so you can test the limit)
+# Backward-compatibility alias
+DAILY_MOVIE_LIMIT = FREE_MOVIE_LIMIT
+
+# Whether admins bypass the limit (default: False so you can test the limit)
 ADMIN_EXEMPT_FROM_LIMIT = os.getenv("ADMIN_EXEMPT_FROM_LIMIT", "False").strip().lower() in ["true", "1", "yes"]
 
 # OMDb API Key
 OMDB_API_KEY = os.getenv("OMDB_API_KEY", "").strip() or None
-
-# Shortlink Verification Settings
-SHORTLINK_ENABLED = os.getenv("SHORTLINK_ENABLED", "True").strip().lower() in ["true", "1", "yes"]
-SHORTLINK_API_URL = os.getenv("SHORTLINK_API_URL", "https://gplinks.in/api").strip()
-SHORTLINK_API_KEY = os.getenv("SHORTLINK_API_KEY", "").strip()
-try:
-    VERIFY_EXPIRE_HOURS = int(os.getenv("VERIFY_EXPIRE_HOURS", "24").strip())
-except ValueError:
-    VERIFY_EXPIRE_HOURS = 24
-TUTORIAL_URL = os.getenv("TUTORIAL_URL", "").strip() or None
 
 # Database Path
 DATABASE_PATH = os.getenv("DATABASE_PATH", "movies.db").strip()

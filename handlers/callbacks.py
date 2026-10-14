@@ -1,3 +1,4 @@
+import asyncio
 from urllib.parse import quote
 from telegram import Update, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.constants import ParseMode
@@ -11,19 +12,22 @@ from database import (
     record_user_download,
     get_referral_stats,
     consume_user_bonus_download,
-    get_user_downloads_today
+    get_user_downloads_today,
+    get_user_total_downloads,
+    check_and_reward_referral,
+    is_user_premium,
+    get_daily_analytics,
+    get_search_history_today,
+    get_active_users_today,
+    get_new_users_today,
+    update_user_activity
 )
 from services.fsub import is_user_subscribed, get_fsub_keyboard, get_fsub_message
 from services.delivery import deliver_movie_file
 from services.ratelimit import (
-    check_daily_limit,
-    get_daily_limit_message,
-    get_daily_limit_keyboard
-)
-from services.shortlink import (
-    create_verification_link,
-    get_verification_message,
-    get_verification_keyboard
+    check_user_download_limit,
+    get_limit_reached_message,
+    get_limit_reached_keyboard
 )
 from handlers.search import build_search_keyboard, PER_PAGE
 from handlers.payment import (
@@ -32,7 +36,8 @@ from handlers.payment import (
     handle_payment_approval,
     handle_payment_rejection
 )
-from config import is_admin, DAILY_MOVIE_LIMIT, logger
+from handlers.admin import format_daily_report, get_daily_report_keyboard
+from config import is_admin, FREE_MOVIE_LIMIT, logger
 
 async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Route all inline button clicks."""
@@ -42,6 +47,8 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
 
     data = query.data
     user = update.effective_user
+    if user:
+        asyncio.create_task(update_user_activity(user.id, user.username, user.first_name))
 
     # No-op button
     if data == "noop":
@@ -80,20 +87,97 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         await query.message.reply_text(stats_text, parse_mode=ParseMode.HTML)
         return
 
+    # Daily Admin Report Callbacks (Admin only)
+    if data.startswith("daily_"):
+        if not is_admin(user.id, user.username):
+            await query.answer("🔒 Only administrators can access daily analytics.", show_alert=True)
+            return
+
+        await query.answer()
+        if data in ["daily_refresh", "daily_back"]:
+            data_report = await get_daily_analytics()
+            text = format_daily_report(data_report)
+            markup = get_daily_report_keyboard()
+            try:
+                await query.edit_message_text(text, reply_markup=markup, parse_mode=ParseMode.HTML)
+            except Exception:
+                pass
+            return
+
+        if data == "daily_searches":
+            searches = await get_search_history_today(limit=40)
+            if not searches:
+                msg = "🔍 <b>Today's Search History</b>\n\n<i>No user searches recorded yet today.</i>"
+            else:
+                msg_lines = [f"🔍 <b>Today's Search History ({len(searches)} queries)</b>\n"]
+                for s in searches:
+                    u_label = f"@{s['current_username']}" if s.get('current_username') else (s.get('user_name') or f"ID:{s['user_id']}")
+                    res = s.get('results_count', 0)
+                    time_str = s['searched_at'].split(" ")[1][:5] if " " in s['searched_at'] else ""
+                    time_tag = f"[{time_str}] " if time_str else ""
+                    status = f"✅ ({res})" if res > 0 else "❌ (not found)"
+                    msg_lines.append(f"• {time_tag}<b>{u_label}</b>: \"<code>{s['query']}</code>\" → {status}")
+                msg = "\n".join(msg_lines)
+
+            back_markup = InlineKeyboardMarkup([
+                [InlineKeyboardButton("⬅️ Back to Summary", callback_data="daily_back")]
+            ])
+            try:
+                await query.edit_message_text(msg, reply_markup=back_markup, parse_mode=ParseMode.HTML)
+            except Exception:
+                await query.message.reply_text(msg, reply_markup=back_markup, parse_mode=ParseMode.HTML)
+            return
+
+        if data == "daily_active":
+            active_users = await get_active_users_today()
+            if not active_users:
+                msg = "👥 <b>Active Users Today</b>\n\n<i>No users active today yet.</i>"
+            else:
+                msg_lines = [f"👥 <b>Active Users Today ({len(active_users)} users)</b>\n"]
+                for u in active_users[:35]:
+                    handle = f"@{u['username']}" if u.get('username') else f"ID: <code>{u['user_id']}</code>"
+                    name = u.get('first_name') or "User"
+                    s_c = u.get('search_count', 0)
+                    d_c = u.get('download_count', 0)
+                    msg_lines.append(f"• <b>{name}</b> ({handle}) — 🔍 {s_c} | 📥 {d_c}")
+                msg = "\n".join(msg_lines)
+
+            back_markup = InlineKeyboardMarkup([
+                [InlineKeyboardButton("⬅️ Back to Summary", callback_data="daily_back")]
+            ])
+            try:
+                await query.edit_message_text(msg, reply_markup=back_markup, parse_mode=ParseMode.HTML)
+            except Exception:
+                await query.message.reply_text(msg, reply_markup=back_markup, parse_mode=ParseMode.HTML)
+            return
+
+        if data == "daily_new":
+            new_users = await get_new_users_today()
+            if not new_users:
+                msg = "🆕 <b>New Users Joined Today</b>\n\n<i>No new users connected today yet.</i>"
+            else:
+                msg_lines = [f"🆕 <b>New Users Joined Today ({len(new_users)} users)</b>\n"]
+                for u in new_users[:35]:
+                    handle = f"@{u['username']}" if u.get('username') else f"ID: <code>{u['user_id']}</code>"
+                    name = u.get('first_name') or "User"
+                    joined_time = u['joined_at'].split(" ")[1][:5] if " " in u['joined_at'] else ""
+                    time_tag = f"[{joined_time}] " if joined_time else ""
+                    msg_lines.append(f"• {time_tag}<b>{name}</b> ({handle})")
+                msg = "\n".join(msg_lines)
+
+            back_markup = InlineKeyboardMarkup([
+                [InlineKeyboardButton("⬅️ Back to Summary", callback_data="daily_back")]
+            ])
+            try:
+                await query.edit_message_text(msg, reply_markup=back_markup, parse_mode=ParseMode.HTML)
+            except Exception:
+                await query.message.reply_text(msg, reply_markup=back_markup, parse_mode=ParseMode.HTML)
+            return
+
     # Buy / Premium storefront button
     if data in ["buy_premium", "buy"]:
         await query.answer()
         await display_storefront(update, context)
-        return
-
-    # Unlock 24h Pass via Shortlink
-    if data == "get_shortlink_pass":
-        await query.answer()
-        bot_info = await context.bot.get_me()
-        token, short_url = await create_verification_link(bot_info.username, user.id)
-        msg_text = get_verification_message()
-        markup = get_verification_keyboard(short_url)
-        await query.message.reply_text(msg_text, reply_markup=markup, parse_mode=ParseMode.HTML)
         return
 
     # Show Personal Referral Link & Stats
@@ -102,24 +186,30 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         bot_info = await context.bot.get_me()
         stats = await get_referral_stats(user.id)
         total_refs = stats["total_referrals"]
+        active_refs = stats.get("active_referrals", 0)
+        pending_refs = stats.get("pending_referrals", max(0, total_refs - active_refs))
         bonus_passes = stats["bonus_downloads"]
+        progress_to_vip = active_refs % 10
 
         invite_link = f"https://t.me/{bot_info.username}?start=ref_{user.id}"
         share_text = quote(f"🎬 Watch & download HD movies for free on Movie World!\nJoin now: {invite_link}")
         share_url = f"https://t.me/share/url?url={invite_link}&text={share_text}"
 
         ref_card = (
-            "🎁 <b>Invite Friends & Earn Free Rewards!</b>\n\n"
-            "Share your personal invite link with friends or in movie channels:\n"
+            "🎁 <b>Invite Friends & Earn Free VIP!</b>\n\n"
+            "Share your personal invite link with your friends or in Telegram groups:\n"
             f"🔗 <b>Your Personal Invite Link:</b>\n"
             f"<code>{invite_link}</code>\n\n"
-            "💎 <b>Rewards:</b>\n"
-            "• <b>Every 1 Friend:</b> +1 Extra Movie Download Pass today!\n"
-            "• <b>Every 3 Friends:</b> <b>🌟 3 Days Free VIP Membership</b> (Unlimited downloads)!\n\n"
-            "📊 <b>Your Referral Stats:</b>\n"
-            f"• Friends Joined: <b>{total_refs}</b>\n"
-            f"• Extra Download Passes Available: <b>{bonus_passes}</b>\n\n"
-            "👇 <i>Tap below to share directly with your friends:</i>"
+            "💎 <b>How It Works:</b>\n"
+            "• Your friends must <b>use the bot (download at least 1 movie)</b> to count as active.\n"
+            "• 🎟️ <b>Each Active Friend:</b> +1 Extra Free Movie Pass!\n"
+            "• 🏆 <b>Invite 10 Active Friends:</b> <b>🌟 1-Week Free VIP Pass (7 Days Unlimited)!</b>\n\n"
+            "📊 <b>Your Referral Status:</b>\n"
+            f"• 👥 Active Friends (Using Bot): <b>{active_refs}</b>\n"
+            f"• ⏳ Pending Friends (Joined, not used yet): <b>{pending_refs}</b>\n"
+            f"• 🎟️ Available Bonus Passes: <b>{bonus_passes}</b>\n"
+            f"• 🎯 Progress to 1-Week VIP: <b>{progress_to_vip}/10</b> active friends\n\n"
+            "👇 <i>Tap below to share your link directly with friends:</i>"
         )
         markup = InlineKeyboardMarkup([
             [InlineKeyboardButton("📲 Share with Friends", url=share_url)],
@@ -251,13 +341,13 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
             await query.answer("❌ This file is no longer available in the database.", show_alert=True)
             return
 
-        # Check 1 Movie Per Day Limit
-        allowed, hours_left, mins_left = await check_daily_limit(user.id, user.username)
+        # Check Movie Download Limit (2 Free Movies Lifetime, VIP, or Active Referral Bonus)
+        allowed, total_used, bonus_left = await check_user_download_limit(user.id, user.username)
         if not allowed:
-            await query.answer("⏳ Daily limit reached (1 movie per day)!", show_alert=True)
+            await query.answer(f"⏳ Free limit reached ({FREE_MOVIE_LIMIT}/{FREE_MOVIE_LIMIT} movies used)!", show_alert=True)
             await query.message.reply_text(
-                text=get_daily_limit_message(hours_left, mins_left),
-                reply_markup=get_daily_limit_keyboard(),
+                text=get_limit_reached_message(total_used),
+                reply_markup=get_limit_reached_keyboard(),
                 parse_mode=ParseMode.HTML
             )
             return
@@ -266,9 +356,59 @@ async def handle_callback_query(update: Update, context: ContextTypes.DEFAULT_TY
         success = await deliver_movie_file(context.bot, update.effective_chat.id, movie)
         if success:
             await record_user_download(user.id, movie_id)
-            count = await get_user_downloads_today(user.id)
-            if count > DAILY_MOVIE_LIMIT:
+            total_after = await get_user_total_downloads(user.id)
+            if total_after > FREE_MOVIE_LIMIT:
                 await consume_user_bonus_download(user.id)
+
+            # Check if this user was invited by someone and reward the referrer now that they used the bot!
+            reward_info = await check_and_reward_referral(user.id)
+            if reward_info:
+                referrer_id = reward_info["referrer_id"]
+                active_count = reward_info["active_count"]
+                try:
+                    if reward_info["is_milestone_10"]:
+                        ref_notice = (
+                            "🏆 <b>MILESTONE UNLOCKED: 1-WEEK VIP PASS!</b>\n\n"
+                            "10 of your invited friends are actively using Movie World!\n"
+                            "🌟 You have been awarded <b>7 Days of Free VIP Membership</b> (Unlimited Downloads)!\n\n"
+                            "Enjoy your movies without any limits! 🍿"
+                        )
+                    else:
+                        ref_notice = (
+                            "🎉 <b>Active Friend Verified!</b>\n\n"
+                            "Your invited friend just downloaded a movie and is actively using Movie World!\n"
+                            "🎁 You received <b>+1 Extra Movie Download Pass</b>!\n\n"
+                            f"📊 Active Friends: <b>{active_count}/10</b> towards a <b>1-Week Free VIP Pass</b>!"
+                        )
+                    await context.bot.send_message(chat_id=referrer_id, text=ref_notice, parse_mode=ParseMode.HTML)
+                except Exception:
+                    pass
+
+            # Force/prompt user to take VIP subscription with high-converting notices
+            if not await is_user_premium(user.id):
+                if total_after == 1:
+                    notice = (
+                        "🍿 <b>Enjoy your movie!</b>\n"
+                        f"ℹ️ <i>Notice: You have used 1 of your {FREE_MOVIE_LIMIT} Free Welcome Movies.</i>\n\n"
+                        "⚡ <b>Want unlimited downloads without any limits or ads?</b>\n"
+                        "👉 Tap /vip to view our VIP passes (starting at only ₹39)!"
+                    )
+                    await query.message.reply_text(notice, parse_mode=ParseMode.HTML)
+                elif total_after == FREE_MOVIE_LIMIT:
+                    notice = (
+                        "🍿 <b>Enjoy your movie!</b>\n"
+                        f"⚠️ <b>You have now used all {FREE_MOVIE_LIMIT} of your Free Welcome Movies!</b>\n\n"
+                        "🔥 <b>Unlock Unlimited HD Downloads Now:</b>\n"
+                        "• No waiting, zero download limits\n"
+                        "• Direct instant download on all new releases\n"
+                        "• Full VIP priority access\n\n"
+                        "👉 Tap below to upgrade to VIP or invite friends to earn free passes!"
+                    )
+                    markup = InlineKeyboardMarkup([
+                        [InlineKeyboardButton("💎 Upgrade to VIP (Unlimited)", callback_data="buy_premium")],
+                        [InlineKeyboardButton("🎁 Invite Friends", callback_data="show_referral_info")]
+                    ])
+                    await query.message.reply_text(notice, reply_markup=markup, parse_mode=ParseMode.HTML)
         return
 
     # Pagination: sp:<query>:<page>

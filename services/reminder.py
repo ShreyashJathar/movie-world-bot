@@ -124,10 +124,12 @@ async def notify_requesters_of_new_movie(
                 notice = (
                     f"🎉 <b>Good News {name}!</b>\n\n"
                     f"The movie you requested — 🎬 <b>{movie_name}</b> — has just been uploaded to our library!\n\n"
+                    f"💡 <i>VIP members enjoy unlimited instant downloads with zero waiting time!</i>\n\n"
                     f"👇 <i>Tap below to download your movie now:</i>"
                 )
                 markup = InlineKeyboardMarkup([
                     [InlineKeyboardButton("▶️ Download Movie Now", url=f"https://t.me/{bot_username}?start=file_{share_code}")],
+                    [InlineKeyboardButton("💎 Upgrade to VIP (Unlimited)", url=f"https://t.me/{bot_username}?start=buy")],
                     [InlineKeyboardButton("🔍 Search Other Movies", url=f"https://t.me/{bot_username}")]
                 ])
             else:
@@ -161,3 +163,35 @@ async def notify_requesters_of_new_movie(
             await asyncio.sleep(0.05)
     except Exception as e:
         logger.warning(f"Error in notify_requesters_of_new_movie: {e}")
+
+async def send_daily_report_to_admins(bot: Bot) -> None:
+    """Compile and broadcast daily analytics report to ADMIN_IDS and ADMIN_GROUP_ID."""
+    try:
+        from database import get_daily_analytics, get_effective_admin_group_id, get_admin_user_ids
+        from handlers.admin import format_daily_report, get_daily_report_keyboard
+        
+        data = await get_daily_analytics()
+        report_text = "📢 <b>AUTOMATIC DAILY SUMMARY RECAP</b>\n\n" + format_daily_report(data)
+        markup = get_daily_report_keyboard()
+
+        admin_group_id = await get_effective_admin_group_id()
+        admin_ids = await get_admin_user_ids()
+
+        targets = set()
+        if admin_group_id:
+            targets.add(admin_group_id)
+        for aid in admin_ids:
+            targets.add(aid)
+
+        for target_id in targets:
+            try:
+                await bot.send_message(
+                    chat_id=target_id,
+                    text=report_text,
+                    reply_markup=markup,
+                    parse_mode=ParseMode.HTML
+                )
+            except Exception as e:
+                logger.info(f"Could not send automatic daily report to {target_id}: {e}")
+    except Exception as e:
+        logger.warning(f"Error in send_daily_report_to_admins: {e}")

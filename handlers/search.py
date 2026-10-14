@@ -8,7 +8,9 @@ from database import (
     search_movies,
     log_movie_request,
     get_effective_admin_group_id,
-    get_admin_user_ids
+    get_admin_user_ids,
+    log_user_search,
+    update_user_activity
 )
 from services.fsub import is_user_subscribed, get_fsub_keyboard, get_fsub_message
 from services.metadata import (
@@ -51,8 +53,11 @@ def build_search_keyboard(movies: list, total_count: int, query: str, page: int)
     if nav_buttons:
         keyboard.append(nav_buttons)
 
+    # VIP Upgrade Button (Pushes users to subscribe for unlimited downloads)
+    keyboard.append([InlineKeyboardButton("💎 VIP: Unlimited Downloads & Fast Speed", callback_data="buy_premium")])
+
     # Share link button
-    keyboard.append([InlineKeyboardButton("🔗 Share Bot", switch_inline_query="")])
+    keyboard.append([InlineKeyboardButton("🔗 Share Bot with Friends", switch_inline_query="")])
 
     return InlineKeyboardMarkup(keyboard)
 
@@ -211,11 +216,16 @@ async def handle_search_query(update: Update, context: ContextTypes.DEFAULT_TYPE
                     f"💡 <b>Found {alt_count} release(s) for '{clean_title}':</b>\n"
                     f"👇 <i>Tap below to download:</i>"
                 )
+            if user:
+                await log_user_search(user.id, user.first_name, user.username, text, alt_count)
             await update.effective_message.reply_text(msg, reply_markup=alt_markup, parse_mode=ParseMode.HTML)
             return
 
     # TIER 4: Completely not found
     if total_count == 0:
+        if user:
+            await log_user_search(user.id, user.first_name, user.username, text, 0)
+
         if year and not clean_title:
             # User only typed a year like "2001"
             await update.effective_message.reply_text(
@@ -252,6 +262,8 @@ async def handle_search_query(update: Update, context: ContextTypes.DEFAULT_TYPE
         return
 
     # MATCH FOUND!
+    if user:
+        await log_user_search(user.id, user.first_name, user.username, text, total_count)
     # Fetch movie metadata & IMDb poster
     meta = await fetch_movie_metadata(clean_title or text, year=year)
     markup = build_search_keyboard(movies, total_count, text, page)

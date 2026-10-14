@@ -141,7 +141,33 @@ async def init_db() -> None:
                 referrer_id INTEGER NOT NULL,
                 referred_id INTEGER UNIQUE NOT NULL,
                 rewarded INTEGER DEFAULT 0,
+                is_active INTEGER DEFAULT 0,
                 created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+            )
+        """)
+
+        # Migrations for referrals
+        try:
+            await db.execute("ALTER TABLE referrals ADD COLUMN is_active INTEGER DEFAULT 0")
+        except Exception:
+            pass
+
+        # Migration for users last_active
+        try:
+            await db.execute("ALTER TABLE users ADD COLUMN last_active TIMESTAMP")
+        except Exception:
+            pass
+
+        # Table for recording user search history
+        await db.execute("""
+            CREATE TABLE IF NOT EXISTS search_history (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                user_id INTEGER NOT NULL,
+                user_name TEXT,
+                user_handle TEXT,
+                query TEXT NOT NULL,
+                results_count INTEGER DEFAULT 0,
+                searched_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
             )
         """)
 
@@ -164,20 +190,26 @@ async def init_db() -> None:
         await db.execute("CREATE INDEX IF NOT EXISTS idx_payment_requests_utr ON payment_requests(utr_number)")
         await db.execute("CREATE INDEX IF NOT EXISTS idx_referrals_referrer ON referrals(referrer_id)")
         await db.execute("CREATE INDEX IF NOT EXISTS idx_referrals_referred ON referrals(referred_id)")
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_referrals_active ON referrals(referrer_id, is_active)")
         await db.execute("CREATE INDEX IF NOT EXISTS idx_movie_requests_status ON movie_requests(status)")
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_search_history_time ON search_history(searched_at)")
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_search_history_user ON search_history(user_id)")
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_users_last_active ON users(last_active)")
+        await db.execute("CREATE INDEX IF NOT EXISTS idx_users_joined_at ON users(joined_at)")
         await db.commit()
     logger.info("Database initialized successfully.")
 
 async def add_user(user_id: int, username: Optional[str], first_name: Optional[str]) -> bool:
-    """Register user if not exists."""
+    """Register user if not exists or update last_active and details."""
     async with aiosqlite.connect(DATABASE_PATH) as db:
         cursor = await db.execute(
             """
-            INSERT INTO users (user_id, username, first_name)
-            VALUES (?, ?, ?)
+            INSERT INTO users (user_id, username, first_name, last_active)
+            VALUES (?, ?, ?, CURRENT_TIMESTAMP)
             ON CONFLICT(user_id) DO UPDATE SET
-                username = excluded.username,
-                first_name = excluded.first_name
+                username = COALESCE(excluded.username, users.username),
+                first_name = COALESCE(excluded.first_name, users.first_name),
+                last_active = CURRENT_TIMESTAMP
             """,
             (user_id, username, first_name)
         )
@@ -198,9 +230,150 @@ async def get_all_user_ids() -> List[int]:
             rows = await cursor.fetchall()
             return [row[0] for row in rows]
 
+async def update_user_activity(user_id: int, username: Optional[str] = None, first_name: Optional[str] = None) -> None:
+    """Update user's last_active timestamp and refresh username / first name."""
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        await db.execute(
+            """
+            INSERT INTO users (user_id, username, first_name, last_active)
+            VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(user_id) DO UPDATE SET
+                username = COALESCE(excluded.username, users.username),
+                first_name = COALESCE(excluded.first_name, users.first_name),
+                last_active = CURRENT_TIMESTAMP
+            """,
+            (user_id, username, first_name)
+        )
+        await db.commit()
+
+async def log_user_search(
+    user_id: int,
+    user_name: Optional[str],
+    user_handle: Optional[str],
+    query: str,
+    results_count: int = 0
+) -> None:
+    """Log a user's movie search query into search_history and update active timestamp."""
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        await db.execute(
+            """
+            INSERT INTO search_history (user_id, user_name, user_handle, query, results_count)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (user_id, user_name, user_handle, query, results_count)
+        )
+        await db.execute(
+            """
+            INSERT INTO users (user_id, username, first_name, last_active)
+            VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(user_id) DO UPDATE SET
+                username = COALESCE(excluded.username, users.username),
+                first_name = COALESCE(excluded.first_name, users.first_name),
+                last_active = CURRENT_TIMESTAMP
+            """,
+            (user_id, user_handle, user_name)
+        )
+        await db.commit()
+
+def _get_start_of_today_utc() -> str:
+    """Return ISO UTC timestamp string representing start of current calendar day in local time."""
+    now_local = datetime.now().astimezone()
+    start_of_day = now_local.replace(hour=0, minute=0, second=0, microsecond=0)
+    return start_of_day.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
+
+async def get_new_users_today() -> List[Dict[str, Any]]:
+    """Return list of new users who registered today with usernames."""
+    since = _get_start_of_today_utc()
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            """
+            SELECT user_id, username, first_name, joined_at
+            FROM users
+            WHERE joined_at >= ?
+            ORDER BY joined_at DESC
+            """,
+            (since,)
+        ) as cur:
+            rows = await cur.fetchall()
+            return [dict(r) for r in rows]
+
+async def get_active_users_today() -> List[Dict[str, Any]]:
+    """
+    Return distinct users who used the bot today (searched, downloaded, or chatted),
+    with their Telegram username, first name, and activity metrics.
+    """
+    since = _get_start_of_today_utc()
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            """
+            SELECT 
+                u.user_id,
+                u.username,
+                u.first_name,
+                MAX(COALESCE(u.last_active, u.joined_at)) as last_seen,
+                COUNT(DISTINCT s.id) as search_count,
+                COUNT(DISTINCT d.id) as download_count
+            FROM users u
+            LEFT JOIN search_history s ON s.user_id = u.user_id AND s.searched_at >= ?
+            LEFT JOIN user_downloads d ON d.user_id = u.user_id AND d.downloaded_at >= ?
+            WHERE u.last_active >= ? OR s.id IS NOT NULL OR d.id IS NOT NULL
+            GROUP BY u.user_id
+            ORDER BY last_seen DESC
+            """,
+            (since, since, since)
+        ) as cur:
+            rows = await cur.fetchall()
+            return [dict(r) for r in rows]
+
+async def get_search_history_today(limit: int = 50) -> List[Dict[str, Any]]:
+    """Return user searches executed today with usernames and result counts."""
+    since = _get_start_of_today_utc()
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        db.row_factory = aiosqlite.Row
+        async with db.execute(
+            """
+            SELECT s.id, s.user_id, s.user_name, s.user_handle, s.query, s.results_count, s.searched_at,
+                   u.username as current_username, u.first_name as current_first_name
+            FROM search_history s
+            LEFT JOIN users u ON u.user_id = s.user_id
+            WHERE s.searched_at >= ?
+            ORDER BY s.id DESC
+            LIMIT ?
+            """,
+            (since, limit)
+        ) as cur:
+            rows = await cur.fetchall()
+            return [dict(r) for r in rows]
+
+async def get_daily_analytics() -> Dict[str, Any]:
+    """Compile comprehensive daily metrics for admin."""
+    new_users = await get_new_users_today()
+    active_users = await get_active_users_today()
+    searches = await get_search_history_today(limit=100)
+    total_downloads = await get_total_downloads_today()
+
+    since = _get_start_of_today_utc()
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        async with db.execute("SELECT COUNT(*) FROM search_history WHERE searched_at >= ?", (since,)) as cur:
+            row = await cur.fetchone()
+            total_searches_count = row[0] if row else len(searches)
+
+    return {
+        "date_str": datetime.now().strftime("%d %b %Y"),
+        "new_users_count": len(new_users),
+        "new_users": new_users,
+        "active_users_count": len(active_users),
+        "active_users": active_users,
+        "total_searches": total_searches_count,
+        "searches": searches,
+        "total_downloads": total_downloads
+    }
+
 def _generate_share_code() -> str:
     """Generate a clean random 8-character string for deep links."""
-    return secrets.token_urlsafe(6).replace("-", "").replace("_", "")[:8]
+    return secrets.token_urlsafe(12).replace("-", "").replace("_", "")[:8]
 
 async def save_movie(
     file_id: str,
@@ -473,6 +646,16 @@ async def get_user_downloads_today(user_id: int) -> int:
             row = await cursor.fetchone()
             return row[0] if row else 0
 
+async def get_user_total_downloads(user_id: int) -> int:
+    """Return lifetime completed downloads count for user."""
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        async with db.execute(
+            "SELECT COUNT(*) FROM user_downloads WHERE user_id = ?",
+            (user_id,)
+        ) as cursor:
+            row = await cursor.fetchone()
+            return row[0] if row else 0
+
 async def is_user_premium(user_id: int) -> bool:
     """Check if user has an active, unexpired VIP/Premium subscription."""
     async with aiosqlite.connect(DATABASE_PATH) as db:
@@ -741,7 +924,7 @@ async def get_recent_movie_requests(limit: int = 15) -> List[Dict[str, Any]]:
 
 async def add_referral(referrer_id: int, referred_id: int) -> Tuple[bool, str, int]:
     """
-    Record a successful referral.
+    Record a referral in pending status until the referred friend uses the bot.
     Returns: (success, reason_or_status, total_referrals)
     """
     if referrer_id == referred_id:
@@ -753,10 +936,43 @@ async def add_referral(referrer_id: int, referred_id: int) -> Tuple[bool, str, i
             if await cur.fetchone():
                 return False, "already_referred", 0
 
-        # Record referral
+        # Record referral as pending (rewarded=0, is_active=0)
+        # Referrer only receives movie pass once the friend uses the bot (downloads a movie)
         await db.execute(
-            "INSERT INTO referrals (referrer_id, referred_id) VALUES (?, ?)",
+            "INSERT INTO referrals (referrer_id, referred_id, rewarded, is_active) VALUES (?, ?, 0, 0)",
             (referrer_id, referred_id)
+        )
+
+        # Count total invitations for this referrer
+        async with db.execute("SELECT COUNT(*) FROM referrals WHERE referrer_id = ?", (referrer_id,)) as cur:
+            row = await cur.fetchone()
+            total = row[0] if row else 1
+
+        await db.commit()
+
+    return True, "pending", total
+
+async def check_and_reward_referral(referred_id: int) -> Optional[Dict[str, Any]]:
+    """
+    Check if the user who just downloaded a movie was referred by someone and hasn't been rewarded yet.
+    If so, verifies the friend as active, awards +1 bonus movie download to referrer,
+    and checks if the referrer reached 10 active friends (awarding a 1-Week VIP Pass).
+    Returns: dict with referrer_id, active_count, is_milestone_10 or None
+    """
+    async with aiosqlite.connect(DATABASE_PATH) as db:
+        async with db.execute(
+            "SELECT id, referrer_id FROM referrals WHERE referred_id = ? AND (rewarded = 0 OR is_active = 0)",
+            (referred_id,)
+        ) as cur:
+            row = await cur.fetchone()
+            if not row:
+                return None
+            ref_id, referrer_id = row
+
+        # Mark referral as active and rewarded
+        await db.execute(
+            "UPDATE referrals SET rewarded = 1, is_active = 1 WHERE id = ?",
+            (ref_id,)
         )
 
         # Award 1 extra bonus movie download pass to referrer
@@ -771,29 +987,44 @@ async def add_referral(referrer_id: int, referred_id: int) -> Tuple[bool, str, i
             (referrer_id,)
         )
 
-        # Count total referrals for this referrer
-        async with db.execute("SELECT COUNT(*) FROM referrals WHERE referrer_id = ?", (referrer_id,)) as cur:
-            row = await cur.fetchone()
-            total = row[0] if row else 1
+        # Count total active (verified) referrals for this referrer
+        async with db.execute(
+            "SELECT COUNT(*) FROM referrals WHERE referrer_id = ? AND (rewarded = 1 OR is_active = 1)",
+            (referrer_id,)
+        ) as cur:
+            total_active_row = await cur.fetchone()
+            active_count = total_active_row[0] if total_active_row else 1
 
         await db.commit()
 
-    # Milestone reward: Every 3 referrals grants 3 Days of Free VIP
-    if total % 3 == 0:
+    # Milestone reward: Every 10 active referrals grants a 1-Week (7 Days) Free VIP Pass!
+    is_milestone_10 = (active_count > 0 and active_count % 10 == 0)
+    if is_milestone_10:
         try:
-            await add_user_subscription(referrer_id, 3)
-            logger.info(f"Referrer {referrer_id} reached {total} referrals; granted 3 days VIP!")
+            await add_user_subscription(referrer_id, 7)
+            logger.info(f"Referrer {referrer_id} reached {active_count} active referrals; awarded 7 days (1 Week) VIP!")
         except Exception as e:
-            logger.warning(f"Could not grant milestone VIP to referrer {referrer_id}: {e}")
+            logger.warning(f"Could not award 7 days VIP to referrer {referrer_id}: {e}")
 
-    return True, "success", total
+    return {
+        "referrer_id": referrer_id,
+        "active_count": active_count,
+        "is_milestone_10": is_milestone_10
+    }
 
 async def get_referral_stats(user_id: int) -> Dict[str, Any]:
-    """Get total referrals and available bonus downloads for user."""
+    """Get total referrals, active referrals, pending referrals, and available bonus downloads."""
     async with aiosqlite.connect(DATABASE_PATH) as db:
         async with db.execute("SELECT COUNT(*) FROM referrals WHERE referrer_id = ?", (user_id,)) as cur:
             ref_row = await cur.fetchone()
             total_refs = ref_row[0] if ref_row else 0
+
+        async with db.execute(
+            "SELECT COUNT(*) FROM referrals WHERE referrer_id = ? AND (rewarded = 1 OR is_active = 1)",
+            (user_id,)
+        ) as cur:
+            active_row = await cur.fetchone()
+            active_refs = active_row[0] if active_row else 0
 
         async with db.execute("SELECT bonus_count FROM user_bonus_downloads WHERE user_id = ?", (user_id,)) as cur:
             b_row = await cur.fetchone()
@@ -801,6 +1032,8 @@ async def get_referral_stats(user_id: int) -> Dict[str, Any]:
 
     return {
         "total_referrals": total_refs,
+        "active_referrals": active_refs,
+        "pending_referrals": max(0, total_refs - active_refs),
         "bonus_downloads": max(0, bonus_count)
     }
 

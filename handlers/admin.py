@@ -1,6 +1,6 @@
 import asyncio
 from typing import Optional, Tuple
-from telegram import Update, Message
+from telegram import Update, Message, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.constants import ParseMode
 from telegram.error import TelegramError
 from telegram.ext import ContextTypes
@@ -20,7 +20,11 @@ from database import (
     get_pending_payment_requests,
     get_payment_request,
     update_payment_request_status,
-    get_recent_movie_requests
+    get_recent_movie_requests,
+    get_daily_analytics,
+    get_new_users_today,
+    get_active_users_today,
+    get_search_history_today
 )
 from services.metadata import format_file_size
 from services.reminder import notify_requesters_of_new_movie
@@ -140,6 +144,7 @@ async def admin_help_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
     text = (
         "👑 <b>Admin Control Panel</b>\n\n"
         "<b>Available Commands:</b>\n"
+        "• <code>/daily</code> - View today's active users with usernames, search history & new users\n"
         "• <code>/stats</code> - View bot metrics & VIP members\n"
         "• <code>/plans</code> - View active VIP subscription plans & pricing\n"
         "• <code>/pending</code> - View pending VIP payment submissions\n"
@@ -158,6 +163,101 @@ async def admin_help_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
         "2. Or add this bot as Admin in your Storage Channel — it will automatically index every movie posted there!"
     )
     await update.effective_message.reply_text(text, parse_mode=ParseMode.HTML)
+
+def format_daily_report(data: dict) -> str:
+    """Format daily analytics report with active users, searches, and new users."""
+    date_str = data["date_str"]
+    new_count = data["new_users_count"]
+    active_count = data["active_users_count"]
+    total_searches = data["total_searches"]
+    downloads = data["total_downloads"]
+
+    lines = [
+        f"📊 <b>DAILY BOT REPORT — {date_str}</b>",
+        "━━━━━━━━━━━━━━━━━━━━━",
+        f"🆕 <b>New Users Joined:</b> <code>{new_count}</code>",
+        f"👥 <b>Active Users Today:</b> <code>{active_count}</code>",
+        f"🔍 <b>Searches Executed:</b> <code>{total_searches}</code>",
+        f"📥 <b>Movies Downloaded:</b> <code>{downloads}</code>",
+        "━━━━━━━━━━━━━━━━━━━━━\n"
+    ]
+
+    # Section 1: New Users
+    lines.append(f"🆕 <b>New Users Joined ({new_count}):</b>")
+    if not data["new_users"]:
+        lines.append("<i>No new users connected today yet.</i>\n")
+    else:
+        new_items = []
+        for u in data["new_users"][:10]:
+            handle = f"@{u['username']}" if u.get('username') else f"ID: <code>{u['user_id']}</code>"
+            name = u.get('first_name') or "User"
+            new_items.append(f"• <b>{name}</b> ({handle})")
+        if len(data["new_users"]) > 10:
+            new_items.append(f"<i>...and {len(data['new_users']) - 10} more</i>")
+        lines.append("\n".join(new_items) + "\n")
+
+    # Section 2: Active Users
+    lines.append(f"👥 <b>Active Users Today ({active_count}):</b>")
+    if not data["active_users"]:
+        lines.append("<i>No active users recorded today yet.</i>\n")
+    else:
+        active_items = []
+        for u in data["active_users"][:10]:
+            handle = f"@{u['username']}" if u.get('username') else f"ID: <code>{u['user_id']}</code>"
+            name = u.get('first_name') or "User"
+            s_count = u.get('search_count', 0)
+            d_count = u.get('download_count', 0)
+            active_items.append(f"• <b>{name}</b> ({handle}) — 🔍 {s_count} searches, 📥 {d_count} files")
+        if len(data["active_users"]) > 10:
+            active_items.append(f"<i>...and {len(data['active_users']) - 10} more</i>")
+        lines.append("\n".join(active_items) + "\n")
+
+    # Section 3: Recent Searches
+    lines.append(f"🔍 <b>Recent Search History Today:</b>")
+    if not data["searches"]:
+        lines.append("<i>No searches recorded today yet.</i>")
+    else:
+        search_items = []
+        for s in data["searches"][:12]:
+            username = s.get('current_username') or s.get('user_handle')
+            user_label = f"@{username}" if username else (s.get('user_name') or f"ID:{s['user_id']}")
+            q = s['query']
+            res = s.get('results_count', 0)
+            status_emoji = f"✅ ({res})" if res > 0 else "❌ (0 found)"
+            search_items.append(f"• <b>{user_label}</b>: \"<code>{q}</code>\" → {status_emoji}")
+        if len(data["searches"]) > 12:
+            search_items.append(f"<i>...and {len(data['searches']) - 12} earlier searches</i>")
+        lines.append("\n".join(search_items))
+
+    return "\n".join(lines)
+
+def get_daily_report_keyboard() -> InlineKeyboardMarkup:
+    """Interactive navigation keyboard for daily analytics report."""
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("🔄 Refresh Data", callback_data="daily_refresh"),
+            InlineKeyboardButton("🔍 All Searches", callback_data="daily_searches")
+        ],
+        [
+            InlineKeyboardButton("👥 Active Users", callback_data="daily_active"),
+            InlineKeyboardButton("🆕 New Users", callback_data="daily_new")
+        ]
+    ])
+
+async def daily_report_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /daily or /report command to show today's user activity, usernames, and search history."""
+    user = update.effective_user
+    if not user or not is_admin(user.id, user.username):
+        await update.effective_message.reply_text("🔒 <b>Access Denied:</b> Only administrators can view daily reports.", parse_mode=ParseMode.HTML)
+        return
+
+    data = await get_daily_analytics()
+    report_text = format_daily_report(data)
+    await update.effective_message.reply_text(
+        text=report_text,
+        reply_markup=get_daily_report_keyboard(),
+        parse_mode=ParseMode.HTML
+    )
 
 async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Show detailed bot stats to admin."""

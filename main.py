@@ -59,14 +59,15 @@ from handlers.admin import (
     pending_payments_command,
     approve_payment_command,
     reject_payment_command,
-    requests_command
+    requests_command,
+    daily_report_command
 )
 from handlers.payment import (
     handle_user_payment_photo,
     set_admin_group_command,
     handle_chat_member_updated
 )
-from services.reminder import check_and_send_vip_reminders
+from services.reminder import check_and_send_vip_reminders, send_daily_report_to_admins
 
 
 async def vip_expiry_reminder_task(app) -> None:
@@ -81,11 +82,31 @@ async def vip_expiry_reminder_task(app) -> None:
         await asyncio.sleep(1800)  # Check every 30 minutes
 
 
+async def daily_admin_recap_task(app) -> None:
+    """Periodic background worker to send automated daily analytics recap to admins at 23:30."""
+    await asyncio.sleep(120)  # Initial 2-minute delay after startup
+    last_sent_date = None
+    while True:
+        try:
+            from datetime import datetime
+            now = datetime.now()
+            today_str = now.strftime("%Y-%m-%d")
+            # Automatically dispatch between 23:30 and 23:59 once per day
+            if now.hour == 23 and now.minute >= 30 and last_sent_date != today_str:
+                await send_daily_report_to_admins(app.bot)
+                last_sent_date = today_str
+                logger.info(f"Automated daily admin report sent for {today_str}")
+        except Exception as e:
+            logger.warning(f"Error in daily_admin_recap_task loop: {e}")
+        await asyncio.sleep(600)  # Check every 10 minutes
+
+
 async def on_startup(app) -> None:
     """Run database migration and launch background workers on bot startup."""
     await init_db()
-    # Start periodic VIP expiry reminder worker in background
+    # Start background workers
     asyncio.create_task(vip_expiry_reminder_task(app))
+    asyncio.create_task(daily_admin_recap_task(app))
 
     bot_info = await app.bot.get_me()
     logger.info("==========================================")
@@ -125,6 +146,7 @@ def main() -> None:
     # Admin Commands
     app.add_handler(CommandHandler("admin", admin_help_command))
     app.add_handler(CommandHandler("stats", stats_command))
+    app.add_handler(CommandHandler(["daily", "dailyreport", "report", "today"], daily_report_command))
     app.add_handler(CommandHandler("plans", plans_command))
     app.add_handler(CommandHandler(["pending", "pendingpayments"], pending_payments_command))
     app.add_handler(CommandHandler("approve", approve_payment_command))
